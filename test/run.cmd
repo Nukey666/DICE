@@ -1,5 +1,6 @@
 @echo off
-rem 编译并运行宿主自测(不需要任何硬件)。用法: test\run.cmd
+rem Build and run the host self-test (no hardware needed). Usage: test\run.cmd
+rem Keep this file ASCII-only: cmd.exe decodes batch files with the OEM code page (936 here).
 pushd "%~dp0.."
 
 gcc -std=c99 -O2 -Wall -Wextra ^
