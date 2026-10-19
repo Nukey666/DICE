@@ -1,0 +1,5 @@
+# 宿主自测产物
+dice_smoke_test
+dice_smoke_test.exe
+*.o
+*.obj

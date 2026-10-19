@@ -1,0 +1,7 @@
+# 统一换行, 免得 Windows 上 clone 出来一堆改动
+* text=auto
+*.c    text eol=lf
+*.h    text eol=lf
+*.sh   text eol=lf
+*.cmd  text eol=crlf
+*.md   text eol=lf
