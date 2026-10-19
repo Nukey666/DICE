@@ -196,7 +196,11 @@ static int s_fail;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); s_fail++; } } while (0)
 
 /* 1~7 照 test/dice_smoke.c 抄, 端口换成 my_port() */
-my_port()->fill(0, 0, 0, 0, my_port()->rgb(0xFF0000));       /* 8: 四角打点, 肉眼确认 */
+int i;
+uint16_t w = my_port()->width - 1, h = my_port()->height - 1;
+uint16_t cx[4] = { 0, w, 0, w }, cy[4] = { 0, 0, h, h };
+for (i = 0; i < 4; i++)                                        /* 8: 四角各点一个, 肉眼确认 */
+    my_port()->fill(cx[i], cy[i], cx[i], cy[i], my_port()->rgb(0xFF0000));
 t0 = my_port()->tick_ms(); dice_update(1.0f / 60.0f); t1 = my_port()->tick_ms();
 printf("single die: %lu ms/frame\n", (unsigned long)(t1 - t0));   /* 12 */
 printf("%s: %d check(s) failed\n", s_fail ? "FAIL" : "PASS", s_fail);
