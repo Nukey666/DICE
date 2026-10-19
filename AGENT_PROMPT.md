@@ -85,6 +85,99 @@ README.md               接口/配置/型号参数（第 3 节是端口定义，
 - 不要用 `HAL_Delay` 控制帧率。
 - 不要假设屏是 240x320；一切按 `width`/`height` 算，布局不要写死坐标。
 
+## 给你的硬件生成自测（照 `test\dice_smoke.c` 抄）
+
+`test/` 里那份自测只证明了库在 PC 上自洽，**没有证明你的屏**。所以上硬件的第一件事，是生成一份
+`test_hw.c`，结构、检查项、输出格式都照 `test/dice_smoke.c` 走 —— 只把端口从 `host_port()`
+换成你自己的 `my_port()`，再加几条只有真屏能测的检查。
+
+**必须保持一致的部分**（这样结果可以直接和 PC 上那份对比）：
+
+- 同样的 `CHECK(cond)` 宏：失败打印 `FAIL 文件:行 表达式`，计数 `s_fail`；
+- 同样的编号顺序和检查项（见下表 1~7），一个都不要删；
+- 最后一行 `printf("%s: %d check(s) failed\n", s_fail ? "FAIL" : "PASS", s_fail);`
+- `return (s_fail != 0);` —— 让构建脚本/CI 能靠返回值判断成败。
+
+**沿用 PC 版的 7 组契约检查**（同一份 `dice_smoke.c` 里就这么写的）：
+
+| # | 检查 | 期望 |
+| --- | --- | --- |
+| 1 | `dice_init(0)` 后 `dice_spawn(...)` | 返回 0，`dice_last_error() == DICE_ERR_PORT` |
+| 2 | `dice_init(my_port())` | `DICE_OK` |
+| 2b | `my_port()->rgb(0xFF0000)` | 565 模式 `0xF800` 且 `sizeof(dice_pixel_t)==2`；888 模式 `0xFF0000` 且 `==4` |
+| 3 | 直径 10 / 中心在屏外的 spawn | `DICE_ERR_SIZE` / `DICE_ERR_POS` |
+| 4 | 六种型号各投一颗（直径 46，给速度） | 都非 0 |
+| 5 | 再投一颗 | `DICE_ERR_FULL` |
+| 5' | 跑 900 帧 `dice_update(1/60)` | 无 NaN、坐标在屏内、`dice_value()` 落在 1..型号面数 |
+| 6 | `dice_kill()` / `dice_clear()` | `alive == 0`，清屏后还能重新投满 |
+| 7 | 60 帧 `dice_event_update()` | 不崩、屏上有东西 |
+
+**再加 6 条只有真屏能测的检查**（编号 8~13，请逐条打印数字，不要只说"通过"）：
+
+| # | 检查 | 做法 / 期望 |
+| --- | --- | --- |
+| 8 | 分辨率与坐标方向 | `my_port()->width/height` 与屏驱动报告一致；在 (0,0)、(w-1,0)、(0,h-1)、(w-1,h-1) 各画一个红点，四个角都要对（错了就是 width/height 填反或坐标原点不同） |
+| 9 | 颜色通道 | `fill` 三条横带：纯红、纯绿、纯蓝。屏上是红/绿/蓝而不是红蓝互换 → `rgb()` 打包正确 |
+| 10 | `flush_row` 连续性 | 画一条 64px 宽的横向条纹（每 4px 交替两色），不能错位/跳行/撕裂 → 说明真的是连续写，而不是逐点设光标 |
+| 11 | 行缓冲上限 | 屏宽 ≤ `DICE_ROW_MAX`；否则 `dice_last_error() == DICE_ERR_ROW`（那就 `-DDICE_ROW_MAX=<屏宽>`） |
+| 12 | 一帧耗时 | 用 `my_port()->tick_ms()` 量：单颗一次 `dice_update(1/60)` 的毫秒数、六颗再一次；打印出来（顺带得到实际帧率上限） |
+| 13 | 无残影 | 一颗骰子沿对角线走一段后停下，屏上只剩骰子本身：背景没有拖影/横条（有横条就是 `flush_row` 不连续或坐标半开区间） |
+
+**输出方式**：有串口就 `printf`（重定向到 UART，115200 起）；没有串口就把结果画在屏上（先 `lcd_clear`，
+再 `lcd_show_string`），或者用两个 LED 表示 PASS/FAIL；两者都没有，就把 `s_fail` 放进全局变量用调试器看。
+
+**骨架**（照这个填，端口换掉即可）：
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+#include "Dice.h"
+#include "D20.h"
+#include "D6.h"
+#include "Poly.h"
+#include "D4.h"
+#include "D8.h"
+#include "D10.h"
+#include "D12.h"
+
+extern const dice_port_t *my_port(void);        /* 你的移植层 */
+extern void my_flush_now(void);                 /* 需要的话：把本帧推给屏 */
+
+static int s_fail;
+#define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); s_fail++; } } while (0)
+
+static const dice_model_t *const s_model[6] = { &dice_d20, &dice_d6, &dice_d4, &dice_d8, &dice_d10, &dice_d12 };
+static const int s_faces[6] = { 20, 6, 4, 8, 10, 12 };
+
+int test_hw(void)
+{
+    dice_t *d[6] = { 0 };
+    uint32_t t0, t1;
+    int i, f;
+
+    /* 1~7: 直接照 test/dice_smoke.c 抄, 只把 host_port() 换成 my_port() */
+    ...
+
+    /* 8: 四角红点 */
+    my_port()->fill(0, 0, 0, 0, my_port()->rgb(0xFF0000));
+    my_port()->fill(my_port()->width - 1, my_port()->height - 1,
+                    my_port()->width - 1, my_port()->height - 1, my_port()->rgb(0xFF0000));
+    my_flush_now();
+    delay_ms(800);                              /* 用你屏的延时, 肉眼确认 */
+
+    /* 12: 单颗一帧耗时 */
+    t0 = my_port()->tick_ms();
+    dice_update(1.0f / 60.0f);
+    t1 = my_port()->tick_ms();
+    printf("single die: %lu ms/frame\n", (unsigned long)(t1 - t0));
+
+    printf("%s: %d check(s) failed\n", s_fail ? "FAIL" : "PASS", s_fail);
+    return (s_fail != 0);
+}
+```
+
+**顺便给出的结论也算交付**：Flash/RAM 增量（`size`/map 文件）、第 12 条测到的 ms、第 13 条有没有残影。
+
 ## 交付
 
 1. `port_myboard.c`（+ 必要时 `.h`），带一行注释说明适配的 MCU 和屏型号。

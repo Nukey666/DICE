@@ -187,6 +187,9 @@ sh test/run.sh            # Windows: test\run.cmd
 
 ## 9. 给 AI Agent 的移植说明（复制这段给模型）
 
+> 完整版（含约束、验收清单、故障对照表、**"给你的硬件生成自测"模板**）：[`AGENT_PROMPT.md`](AGENT_PROMPT.md)。
+> 下面这段是精简版，够用但没那么多验收细节。
+
 > 这是一个便携 C99 骰子渲染库。任务：把它移植到 `<你的 MCU + 屏>` 上。
 > - **只写一个移植层文件**，实现第 3 节的 `dice_port_t`（`width/height/fill/flush_row/tick_ms/rgb`），
 >   在屏初始化之后调 `dice_init(你的port)`。**不要改 `Dice.c`**；如果非要改，说明是库的缺陷。
