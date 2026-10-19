@@ -173,6 +173,36 @@ sh test/run.sh            # Windows: test\run.cmd
 
 新写型号时把它的头文件加进 `test/dice_smoke.c` 的 `s_model[]` / `s_faces[]`，就能在移植到硬件之前先跑一遍。
 
+### 7.1 上硬件后补测这 6 项
+
+PC 上那份只证明库自洽，没证明**你的屏**。把 `test/dice_smoke.c` 复制成你的 `test_hw.c`，
+**只把 `host_port()` 换成你的 `my_port()`**，7 组契约检查一项都别删（这样结果能和 PC 上的逐条对照），
+再加这 6 项只有真屏能测的：
+
+| # | 检查 | 期望 |
+| --- | --- | --- |
+| 8 | 分辨率/坐标方向 | `width`/`height` 与驱动一致；在 (0,0)、(w-1,0)、(0,h-1)、(w-1,h-1) 各画一个红点，四角都要对 |
+| 9 | 颜色通道 | 红/绿/蓝三条横带，屏上是红绿蓝（红蓝互换 = `rgb()` 打包错） |
+| 10 | `flush_row` 连续性 | 画 64px 宽、每 4px 交替两色的横条：不能错位/跳行/撕裂 |
+| 11 | 行缓冲上限 | 屏宽 ≤ `DICE_ROW_MAX`；不够就 `-DDICE_ROW_MAX=<屏宽>`，否则 `dice_last_error() == DICE_ERR_ROW` |
+| 12 | 一帧耗时 | 用 `tick_ms()` 量单颗和六颗各跑一次 `dice_update(1/60)` 的 ms（顺带得到帧率上限） |
+| 13 | 无残影 | 一颗骰子沿对角线走一段后停下：屏上只剩骰子，背景没有拖影/横条 |
+
+输出：有串口就 `printf`（115200 起）；没串口就画在屏上（`lcd_clear` + `lcd_show_string`）或用两个 LED 表示 PASS/FAIL。
+结尾照 `test/dice_smoke.c` 的写法，让构建脚本能靠返回值判断：
+
+```c
+static int s_fail;
+#define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); s_fail++; } } while (0)
+
+/* 1~7 照 test/dice_smoke.c 抄, 端口换成 my_port() */
+my_port()->fill(0, 0, 0, 0, my_port()->rgb(0xFF0000));       /* 8: 四角打点, 肉眼确认 */
+t0 = my_port()->tick_ms(); dice_update(1.0f / 60.0f); t1 = my_port()->tick_ms();
+printf("single die: %lu ms/frame\n", (unsigned long)(t1 - t0));   /* 12 */
+printf("%s: %d check(s) failed\n", s_fail ? "FAIL" : "PASS", s_fail);
+return (s_fail != 0);
+```
+
 ## 8. 加一种新骰子（或改现有型号）
 
 1. 新写一个 `models/MyDie.c/.h`，导出一个 `const dice_model_t dice_my`，六个回调见 `Dice.h` 的
@@ -187,16 +217,13 @@ sh test/run.sh            # Windows: test\run.cmd
 
 ## 9. 给 AI Agent 的移植说明（复制这段给模型）
 
-> 完整版（含约束、验收清单、故障对照表、**"给你的硬件生成自测"模板**）：[`AGENT_PROMPT.md`](AGENT_PROMPT.md)。
-> 下面这段是精简版，够用但没那么多验收细节。
-
 > 这是一个便携 C99 骰子渲染库。任务：把它移植到 `<你的 MCU + 屏>` 上。
 > - **只写一个移植层文件**，实现第 3 节的 `dice_port_t`（`width/height/fill/flush_row/tick_ms/rgb`），
 >   在屏初始化之后调 `dice_init(你的port)`。**不要改 `Dice.c`**；如果非要改，说明是库的缺陷。
 > - 颜色参数一律 RGB888；`rgb()` 负责转成本屏像素（565 打包或原样返回）。
 > - `flush_row` 必须实现成"连续写 len 个像素"，不要在里面逐点设光标；否则每帧 FMC/SPI 开销会爆炸。
 > - 主循环调 `dice_event_update()`（简单）或固定节奏调 `dice_update(dt)`（自己控帧率）。两者都不要阻塞。
-> - 先跑 `test/run.sh` 证明编译和逻辑没问题，再上硬件。
+> - 先跑 `test/run.sh` 证明编译和逻辑没问题，再上硬件；上硬件后再照 **7.1 节**补测那 6 项。
 > - 报错先看 `dice_last_error()`；`DICE_ERR_ROW` 表示屏比 `DICE_ROW_MAX` 宽，加大这个宏。
 > - 屏上出现"骰子后方的横条/闪烁"通常是 `flush_row` 没有真的整行连续写，或者 `fill`/`flush_row`
 >   的坐标没按闭区间处理。
